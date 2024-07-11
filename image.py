@@ -8,7 +8,7 @@ import sys
 import os
 
 
-palette = [
+dither_palette = [
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -76,6 +76,17 @@ palette = [
 ]
 
 
+available_modes = [
+  "half",
+  "half-dither",
+  "single",
+  "single-dither",
+  "double",
+  "double-dither",
+  "braille",
+]
+
+
 rotation_modes = {
   "0"   : None,
   "90"  : Image.ROTATE_90,
@@ -102,14 +113,14 @@ sampling_modes = {
 
 
 class Options:
-  pixel      : str
-  term_size  : tuple[int, int]
   img_file   : list[str]
-  rotate     : str
   flip       : str
-  size       : str
+  mode       : str
   resampling : str
-  color      : str
+  rotate     : str
+  size       : str
+  term_size  : tuple[int, int]
+  char_size  : tuple[float, float]
   time       : float
 
 
@@ -122,16 +133,22 @@ def parse_args(argv: list[str]) -> Options:
     help="The image(s) to be displayed"
   )
   parser.add_argument(
-    "-c", "--color", choices=["normal", "dither"], default="normal",
-    help="Specify the rendering color mode"
+    "-f", "--flip", choices=["no", "h", "v"], default="no",
+    help="Flip image (horizontally or vertically)"
+  )
+  parser.add_argument(
+    "-m", "--mode", choices=available_modes, default=available_modes[0],
+    help="Specify how the image should be rendered"
+  )
+  parser.add_argument(
+    "-p", "--resampling", choices=["nearest", "box", "bilinear", "hamming",
+    "bicubic", "lanczos"],
+    default="lanczos",
+    help="Resampling mode to use when resizing the image"
   )
   parser.add_argument(
     "-r", "--rotate", choices=["0", "90", "180", "270"], default="0",
     help="Rotate image (in 90 degree increments)"
-  )
-  parser.add_argument(
-    "-f", "--flip", choices=["no", "h", "v"], default="no",
-    help="Flip image (horizontally or vertically)"
   )
   parser.add_argument(
     "-s", "--size", choices=["height", "width", "orig", "fill"],
@@ -143,14 +160,8 @@ def parse_args(argv: list[str]) -> Options:
     help="Specify the size of the terminal manually"
   )
   parser.add_argument(
-    "-m", "--resampling", choices=["nearest", "box", "bilinear", "hamming",
-    "bicubic", "lanczos"],
-    default="lanczos",
-    help="Resampling mode to use when resizing the image"
-  )
-  parser.add_argument(
-    "-p", "--pixel", choices=["half", "single", "double"], default="half",
-    help="Specify the size, in characters, of each pixel"
+    "-c", "--char-size", nargs=2, type=float, default=(1, 2),
+    help="Specify the proportions of each character"
   )
   parser.add_argument(
     "-t", "--time", type=float, default=0,
@@ -159,13 +170,24 @@ def parse_args(argv: list[str]) -> Options:
   return parser.parse_args(argv[1:])
 
 
-def calc_pixel_shape(pixel: str) -> tuple[tuple[int, int], str]:
-  if pixel == "single":
-    return ((1, 1,), " ")
-  if pixel == "double":
-    return ((2, 1,), "  ")
-  elif pixel == "half":
-    return ((1, 2,), "▀")
+def calc_rendering_mode(mode: str) -> tuple[tuple[int, int], tuple]:  
+  modes = {
+    "half": (
+      (1, 2), (do_nothing,      newline_ansi, render_half)),
+    "half-dither": (
+      (1, 2), (dither_image,    newline_ansi, render_half_dithered)),
+    "single": (
+      (1, 1), (do_nothing,      newline_ansi, render_single)),
+    "single-dither": (
+      (1, 1), (dither_image,    newline_ansi, render_single_dithered)),
+    "double": (
+      (.5, 1), (do_nothing,     newline_ansi, render_single)),
+    "double-dither": (
+      (.5, 1), (dither_image,   newline_ansi, render_single_dithered)),
+    "braille": (
+      (2, 8), (dither_bw_image, newline_ansi, render_braille)),
+  }
+  return modes[mode]
 
 
 def calc_screen_size(term_size: tuple[int, int]) -> tuple[int, int]:
@@ -176,140 +198,183 @@ def calc_screen_size(term_size: tuple[int, int]) -> tuple[int, int]:
     return (W, H - 2)
 
 
+def normalize_char_size(
+  char_size: tuple[float, float]
+) -> tuple[float, float]:
+  w, h = char_size
+  den = min(w, h)
+  return w / den, h / den
+
+
 def calc_size(
   size_mode   : str,
   screen_size : tuple[int, int],
   image_size  : tuple[int, int],
-  pixel_size  : tuple[int, int]
-):
-  W, H = screen_size
-  w, h = image_size
-  w *= 2
-  pixel_w, pixel_h = pixel_size
-  if size_mode == "fill":
-    newsize = (W // pixel_w,
-    H * pixel_h)
-  else:
-    if size_mode == "height":
-      ratio = min(W / w, H / h)
-    elif size_mode == "width":
-      ratio = W / w
-    elif size_mode == "orig":
-      ratio = 1
-    newsize = (
-      math.floor(w * ratio // pixel_w),
-      math.floor(h * ratio * pixel_h)
-    )
-  return newsize
+  pixel_size  : tuple[int, int],
+  char_size   : tuple[float, float],
+) -> tuple[int, int]:
+  sw, sh = screen_size
+  iw, ih = image_size
+  pw, ph = pixel_size
+  
+  # Terminal characters are approx. twice as tall as they are wide
+  cw, ch = char_size
+  iw *= ch
+  ih *= cw
+
+  match size_mode:
+    case "fill":
+      nw, nh = sw, sh
+    case "orig":
+      nw, nh = iw, ih
+    case "height":
+      ratio = min(sw / iw, sh / ih)
+      nw, nh = iw * ratio, ih * ratio
+    case "width":
+      ratio = sw / iw
+      nw, nh = iw * ratio, ih * ratio
+  
+  nw = math.floor(math.floor(nw) * pw)
+  nh = math.floor(math.floor(nh) * ph)
+
+  return nw, nh
 
 
 def apply_transforms(
   im       : Image.Image,
-  newsize  : tuple[int, int],
   rotation : int | None,
   flip     : int | None,
-  sampling : int
 ) -> Image.Image:
   im = im.convert("RGB")
   if rotation is not None:
     im = im.transpose(rotation)
   if flip is not None:
     im = im.transpose(flip)
-  im = im.resize(newsize, sampling)
   return im
 
 
-def render_dithered(
-  im      : Image.Image,
-  newsize : tuple[int, int],
-  pixel_c : str,
-  p_img   : Image
-):
-  out = ""
-  im = im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
-  for i in range(newsize[1]):
-    for j in range(newsize[0]):
-      p = im.getpixel((j, i))
-      p = 16 if p < 16 else p
-      out += f"\033[48;5;{p}m{pixel_c}"
-    out += "\033[m\n"
-  return out
+def newline_ansi() -> str:
+  return "\033[m\n"
 
 
-def render_dithered_subpixel(
-  im      : Image.Image,
-  newsize : tuple[int, int],
-  pixel_c : str,
-  p_img   : Image
-):
-  out = ""
-  im = im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
-  for i in range(newsize[1] // 2):
-    for j in range(newsize[0]):
-      p1 = im.getpixel((j, i * 2))
-      p2 = im.getpixel((j, i * 2 + 1))
-      p1 = 16 if p1 < 16 else p1
-      p2 = 16 if p2 < 16 else p2
-      out += f"\033[38;5;{p1};48;5;{p2}m{pixel_c}"
-    out += "\033[m\n"
-  return out
+def dither_image(im: Image.Image) -> Image.Image:
+  p_img = Image.new("P", (16, 16))
+  p_img.putpalette(dither_palette)
+  return im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
 
 
-def render_normal(
-  im      : Image.Image,
-  newsize : tuple[int, int],
-  pixel_c : str,
-  _       : Image
-):
-  out = ""
-  for i in range(newsize[1]):
-    for j in range(newsize[0]):
-      r, g, b = im.getpixel((j, i))
-      out += f"\033[48;2;{r};{g};{b}m{pixel_c}"
-    out += "\033[m\n"
-  return out
+def dither_bw_image(im: Image.Image) -> Image.Image:
+  p_img = Image.new("P", (2, 1))
+  p_img.putpalette([
+      0,   0,   0,
+    255, 255, 255,
+  ])
+  return im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
 
 
-def render_normal_subpixel(
-  im      : Image.Image,
-  newsize : tuple[int, int],
-  pixel_c : str,
-  _       : Image
-):
-  out = ""
-  for i in range(newsize[1] // 2):
-    for j in range(newsize[0]):
-      r1, g1, b1 = im.getpixel((j, i * 2))
-      r2, g2, b2 = im.getpixel((j, i * 2 + 1))
-      out += f"\033[38;2;{r1};{g1};{b1};48;2;{r2};{g2};{b2}m{pixel_c}"
-    out += "\033[m\n"
-  return out
+def do_nothing(im: Image.Image) -> Image.Image:
+  return im
+
+
+def render_half(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  r1, g1, b1 = im.getpixel((j, i))
+  r2, g2, b2 = im.getpixel((j, i + 1))
+  return f"\033[38;2;{r1};{g1};{b1};48;2;{r2};{g2};{b2}m▀"
+
+
+def render_half_dithered(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  p1 = im.getpixel((j, i))
+  p2 = im.getpixel((j, i + 1))
+  p1 = 16 if p1 < 16 else p1
+  p2 = 16 if p2 < 16 else p2
+  return f"\033[38;5;{p1};48;5;{p2}m▀"
+
+
+def render_single(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  r, g, b = im.getpixel((j, i))
+  return f"\033[48;2;{r};{g};{b}m "
+
+
+def render_single_dithered(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  p = im.getpixel((j, i))
+  p = 16 if p < 16 else p
+  return f"\033[48;5;{p}m "
+
+
+def render_braille(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  p1 = im.getpixel((j, i)) == 1
+  p2 = im.getpixel((j, i + 1)) == 1
+  p3 = im.getpixel((j, i + 2)) == 1
+  p4 = im.getpixel((j + 1, i)) == 1
+  p5 = im.getpixel((j + 1, i + 1)) == 1
+  p6 = im.getpixel((j + 1, i + 2)) == 1
+  p7 = im.getpixel((j, i + 3)) == 1
+  p8 = im.getpixel((j + 1, i + 3)) == 1
+  return "\033[1m" + chr(
+    0x2800 +
+    (p1 << 0) +
+    (p2 << 1) +
+    (p3 << 2) +
+    (p4 << 3) +
+    (p5 << 4) +
+    (p6 << 5) +
+    (p7 << 6) +
+    (p8 << 7)
+  )
 
 
 def render(
-  pixel_shape     : tuple[tuple[int, int], str],
-  img_file        : str,
-  size_mode       : str,
-  screen_size     : tuple[int, int],
-  rotation        : int | None,
-  flip            : int | None,
-  sampling        : int,
-  render_function : callable,
-  p_img           : Image.Image,
-  multiple        : bool,
-  delay           : float,
-):
-  pixel_size, pixel_c = pixel_shape
+  img_file     : str,
+  pixel_size   : tuple[int, int],
+  size_mode    : str,
+  screen_size  : tuple[int, int],
+  char_size    : tuple[float, float],
+  rotation     : int | None,
+  flip         : int | None,
+  sampling     : int,
+  render_funcs : tuple[callable, callable, callable],
+  multiple     : bool,
+  delay        : float,
+) -> int:
   try:
     im = Image.open(img_file)
   except Exception:
     print(f"Error! Could not open file '{img_file}'")
     return 1
   
-  newsize = calc_size(size_mode, screen_size, im.size, pixel_size)
-  im = apply_transforms(im, newsize, rotation, flip, sampling)
+  im = apply_transforms(im, rotation, flip)
+  newsize = calc_size(size_mode, screen_size, im.size, pixel_size, char_size)
+  im = im.resize(newsize, sampling)
 
-  out = render_function(im, newsize, pixel_c, p_img)
+  init, line, loop = render_funcs
+  im = init(im)
+  out = ""
+  for i in range(round(newsize[1] / pixel_size[1])):
+    for j in range(round(newsize[0] / pixel_size[0])):
+      pi = i * pixel_size[1]
+      pj = j * pixel_size[0]
+      out += loop(im, pi, pj)
+    out += line()
 
   if multiple:
     print(f"{img_file}:")
@@ -324,39 +389,28 @@ def render(
 def main(argv: list[str]) -> int:
   options = parse_args(argv)  
 
-  pixel_shape = calc_pixel_shape(options.pixel)
+  pixel_size, render_function = calc_rendering_mode(options.mode)
   screen_size = calc_screen_size(options.term_size)
+  char_size = normalize_char_size(options.char_size)
 
-  p_img = Image.new("P", (16, 16))
-  p_img.putpalette(palette)
   status = 0
 
   rotation = rotation_modes [options.rotate]
   flip     = flip_modes     [options.flip]
   sampling = sampling_modes [options.resampling]
 
-  match (options.color, pixel_shape[0][1]):
-    case ("normal", 1):
-      render_function = render_normal
-    case ("normal", 2):
-      render_function = render_normal_subpixel
-    case ("dither", 1):
-      render_function = render_dithered
-    case ("dither", 2):
-      render_function = render_dithered_subpixel
-
   status = 0
   for img_file in options.img_file:
     result = render(
-      pixel_shape,
       img_file,
+      pixel_size,
       options.size,
       screen_size,
+      char_size,
       rotation,
       flip,
       sampling,
       render_function,
-      p_img,
       len(options.img_file) > 1,
       options.time,
     )
