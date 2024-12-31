@@ -1,4 +1,4 @@
-#!/bin/python3.11
+#!/bin/python3.12
 
 from PIL import Image
 import argparse
@@ -6,7 +6,6 @@ import math
 import time
 import sys
 import os
-
 
 dither_palette = [
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -160,7 +159,7 @@ def parse_args(argv: list[str]) -> Options:
     help="Specify the size of the terminal manually"
   )
   parser.add_argument(
-    "-c", "--char-size", nargs=2, type=float, default=(1, 2),
+    "-c", "--char-size", nargs=2, type=float, default=(5, 11),
     help="Specify the proportions of each character"
   )
   parser.add_argument(
