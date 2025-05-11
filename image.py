@@ -7,7 +7,7 @@ import time
 import sys
 import os
 
-dither_palette = [
+dither_palette_256 = [
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -75,13 +75,22 @@ dither_palette = [
 ]
 
 
+dither_palette_8 = [
+    1,   1,   1, 222,  56,  43,  57, 181,  74, 255, 199,   6,
+    0, 111, 184, 118,  38, 113,  44, 181, 233, 204, 204, 204,
+]
+
+
 available_modes = [
   "half",
   "half-dither",
+  "half-dither-8",
   "single",
   "single-dither",
+  "single-dither-8",
   "double",
   "double-dither",
+  "double-dither-8",
   "braille",
 ]
 
@@ -172,24 +181,30 @@ def parse_args(argv: list[str]) -> Options:
 def calc_rendering_mode(mode: str) -> tuple[tuple[int, int], tuple]:  
   modes = {
     "half": (
-      (1, 2), (do_nothing,      newline_ansi, render_half)),
+      (1, 2), (do_nothing,        newline_ansi, render_half)),
     "half-dither": (
-      (1, 2), (dither_image,    newline_ansi, render_half_dithered)),
+      (1, 2), (dither_image_256,  newline_ansi, render_half_dithered)),
+    "half-dither-8": (
+      (1, 2), (dither_image_8,    newline_ansi, render_half_dithered_8)),
     "single": (
-      (1, 1), (do_nothing,      newline_ansi, render_single)),
+      (1, 1), (do_nothing,        newline_ansi, render_single)),
     "single-dither": (
-      (1, 1), (dither_image,    newline_ansi, render_single_dithered)),
+      (1, 1), (dither_image_256,  newline_ansi, render_single_dithered)),
+    "single-dither-8": (
+      (1, 1), (dither_image_8,    newline_ansi, render_single_dithered_8)),
     "double": (
-      (.5, 1), (do_nothing,     newline_ansi, render_single)),
+      (.5, 1), (do_nothing,       newline_ansi, render_single)),
     "double-dither": (
-      (.5, 1), (dither_image,   newline_ansi, render_single_dithered)),
+      (.5, 1), (dither_image_256, newline_ansi, render_single_dithered)),
+    "double-dither-8": (
+      (.5, 1), (dither_image_8,   newline_ansi, render_single_dithered_8)),
     "braille": (
       (2, 8), (dither_bw_image, newline_ansi, render_braille)),
   }
   return modes[mode]
 
 
-def calc_screen_size(term_size: tuple[int, int]) -> tuple[int, int]:
+def calc_screen_size(term_size: tuple[int, int]|None):
   if term_size is not None:
     return term_size
   else:
@@ -232,6 +247,8 @@ def calc_size(
     case "width":
       ratio = sw / iw
       nw, nh = iw * ratio, ih * ratio
+    case _:
+      raise ValueError(f"Unknown size mode: {size_mode}")
   
   nw = math.floor(math.floor(nw) * pw)
   nh = math.floor(math.floor(nh) * ph)
@@ -256,9 +273,15 @@ def newline_ansi() -> str:
   return "\033[m\n"
 
 
-def dither_image(im: Image.Image) -> Image.Image:
+def dither_image_256(im: Image.Image) -> Image.Image:
   p_img = Image.new("P", (16, 16))
-  p_img.putpalette(dither_palette)
+  p_img.putpalette(dither_palette_256)
+  return im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
+
+
+def dither_image_8(im: Image.Image) -> Image.Image:
+  p_img = Image.new("P", (16, 16))
+  p_img.putpalette(dither_palette_8)
   return im.quantize(palette=p_img, dither=Image.Dither.FLOYDSTEINBERG)
 
 
@@ -297,6 +320,16 @@ def render_half_dithered(
   return f"\033[38;5;{p1};48;5;{p2}m▀"
 
 
+def render_half_dithered_8(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  p1 = im.getpixel((j, i))
+  p2 = im.getpixel((j, i + 1))
+  return f"\033[{p1 + 30};{p2 + 40}m▀"
+
+
 def render_single(
   im : Image.Image,
   i  : int,
@@ -314,6 +347,15 @@ def render_single_dithered(
   p = im.getpixel((j, i))
   p = 16 if p < 16 else p
   return f"\033[48;5;{p}m "
+
+
+def render_single_dithered_8(
+  im : Image.Image,
+  i  : int,
+  j  : int,
+) -> str:
+  p = im.getpixel((j, i))
+  return f"\033[{p + 40}m "
 
 
 def render_braille(
