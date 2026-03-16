@@ -1,0 +1,8 @@
+# created by virtualenv automatically
+.direnv/
+bin/
+lib/
+.envrc
+CACHEDIR.TAG
+pyvenv.cfg
+result
