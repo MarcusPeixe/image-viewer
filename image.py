@@ -178,7 +178,7 @@ def parse_args(argv: list[str]) -> Options:
   return parser.parse_args(argv[1:])
 
 
-def calc_rendering_mode(mode: str) -> tuple[tuple[int, int], tuple]:  
+def calc_rendering_mode(mode: str) -> tuple[tuple[int, int], tuple]:
   modes = {
     "half": (
       (1, 2), (do_nothing,        newline_ansi, render_half)),
@@ -230,7 +230,7 @@ def calc_size(
   sw, sh = screen_size
   iw, ih = image_size
   pw, ph = pixel_size
-  
+
   # Terminal characters are approx. twice as tall as they are wide
   cw, ch = char_size
   iw *= ch
@@ -249,7 +249,7 @@ def calc_size(
       nw, nh = iw * ratio, ih * ratio
     case _:
       raise ValueError(f"Unknown size mode: {size_mode}")
-  
+
   nw = math.floor(math.floor(nw) * pw)
   nh = math.floor(math.floor(nh) * ph)
 
@@ -305,7 +305,7 @@ def render_half(
 ) -> str:
   r1, g1, b1 = im.getpixel((j, i))
   r2, g2, b2 = im.getpixel((j, i + 1))
-  return f"\033[38;2;{r1};{g1};{b1};48;2;{r2};{g2};{b2}m▀"
+  return f"\033[48;2;{r1};{g1};{b1};38;2;{r2};{g2};{b2}m▄"
 
 
 def render_half_dithered(
@@ -317,7 +317,7 @@ def render_half_dithered(
   p2 = im.getpixel((j, i + 1))
   p1 = 16 if p1 < 16 else p1
   p2 = 16 if p2 < 16 else p2
-  return f"\033[38;5;{p1};48;5;{p2}m▀"
+  return f"\033[48;5;{p1};38;5;{p2}m▄"
 
 
 def render_half_dithered_8(
@@ -327,7 +327,7 @@ def render_half_dithered_8(
 ) -> str:
   p1 = im.getpixel((j, i))
   p2 = im.getpixel((j, i + 1))
-  return f"\033[{p1 + 30};{p2 + 40}m▀"
+  return f"\033[{p1 + 40};{p2 + 30}m▄"
 
 
 def render_single(
@@ -402,7 +402,7 @@ def render(
   except Exception:
     print(f"Error! Could not open file '{img_file}'")
     return 1
-  
+
   im = apply_transforms(im, rotation, flip)
   newsize = calc_size(size_mode, screen_size, im.size, pixel_size, char_size)
   im = im.resize(newsize, sampling)
@@ -428,7 +428,7 @@ def render(
 
 
 def main(argv: list[str]) -> int:
-  options = parse_args(argv)  
+  options = parse_args(argv)
 
   pixel_size, render_function = calc_rendering_mode(options.mode)
   screen_size = calc_screen_size(options.term_size)
@@ -456,7 +456,7 @@ def main(argv: list[str]) -> int:
       options.time,
     )
     status = max(status, result)
-  
+
   return status
 
 
